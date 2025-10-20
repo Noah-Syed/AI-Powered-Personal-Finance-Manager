@@ -1,0 +1,6 @@
+# Ignore dependencies and environment files
+frontend/node_modules/
+backend/__pycache__/
+backend/.venv/
+.vscode/
+.env
