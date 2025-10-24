@@ -1,64 +1,46 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { getCurrentUser } from "../api";
+import { Link, useNavigate } from "react-router-dom";
+import { getMe, logout } from "../api";
 
-function Header() {
+export default function Header() {
   const [user, setUser] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (token) {
-      getCurrentUser(token)
-        .then((data) => setUser(data))
-        .catch(() => setUser(null));
+      getMe(token)
+        .then(setUser)
+        .catch(() => {
+          setUser(null);
+          localStorage.removeItem("token");
+        });
     }
   }, []);
 
-  const handleLoginClick = () => {
-    navigate("/login");
+  const handleLogout = async () => {
+    const token = localStorage.getItem("token");
+    if (token) await logout(token);
+    localStorage.removeItem("token");
+    setUser(null);
+    navigate("/");
   };
 
   return (
-    <header
-      style={{
-        background: "#282c34",
-        color: "white",
-        padding: "1rem 2rem",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-      }}
-    >
-      {/* Left side: App title */}
-      <h2 style={{ margin: 0 }}>Smart Finance Tracker</h2>
-
-      {/* Right side: user status or login button */}
-      <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+    <header style={{ display: "flex", justifyContent: "space-between", padding: "1rem" }}>
+      <Link to="/">Home</Link>
+      <div>
         {user ? (
-          <p style={{ margin: 0 }}>Welcome, {user.username} 👋</p>
-        ) : (
           <>
-            <p style={{ margin: 0 }}>Not logged in</p>
-            <button
-              onClick={handleLoginClick}
-              style={{
-                backgroundColor: "#007bff",
-                color: "white",
-                border: "none",
-                borderRadius: "6px",
-                padding: "8px 16px",
-                cursor: "pointer",
-                fontSize: "1rem",
-              }}
-            >
-              Login
-            </button>
+            <span style={{ marginRight: 8 }}>Hi, {user.username}</span>
+            <button onClick={handleLogout}>Logout</button>
           </>
+        ) : (
+          <Link to="/login">
+            <button>Login</button>
+          </Link>
         )}
       </div>
     </header>
   );
 }
-
-export default Header;

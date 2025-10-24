@@ -32,10 +32,17 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
+    jti = str(uuid4())
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     # assign a unique JWT ID so we can revoke specific tokens
-    to_encode.update({"exp": expire, "jti": str(uuid4())})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    to_encode.update({"exp": expire, "jti": jti})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM), jti, expire
+
+def is_token_revoked(db: Session, jti: str) -> bool:
+    return db.query(models.RevokedToken).filter(models.RevokedToken.jti == jti).first() is not None
+
+def decode_token(token: str):
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
 class Token(BaseModel):
     access_token: str
@@ -67,19 +74,36 @@ def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
     return {"message": "Signup successful", "user_id": new_user.id, "username": new_user.username}
 
-@app.post("/login", response_model=Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    # OAuth2PasswordRequestForm sends fields as: username=<email_or_username>, password=<password>
-    identifier = form_data.username  # allow login by email for now
-    user = db.query(models.User).filter(models.User.email == identifier).first()
+@app.post("/login")
+def login(data: dict, db: Session = Depends(get_db)):
+    username = data.get("username")
+    password = data.get("password")
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not bcrypt.checkpw(password.encode(), user.hashed_password.encode()):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+
+    token_data = {"sub": str(user.id), "username": user.username}
+    token, jti, exp = create_access_token(token_data)
+    return {"access_token": token, "token_type": "bearer", "expires_at": exp}
+
+@app.get("/me")
+def get_me(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    try:
+        payload = decode_token(token)
+        jti = payload.get("jti")
+        user_id = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    if is_token_revoked(db, jti):
+        raise HTTPException(status_code=401, detail="Token revoked")
+
+    user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
+        raise HTTPException(status_code=404, detail="User not found")
 
-    if not bcrypt.checkpw(form_data.password.encode('utf-8'), user.hashed_password.encode('utf-8')):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid credentials")
-
-    token = create_access_token({"sub": str(user.id)})
-    return {"access_token": token, "token_type": "bearer"}
+    return {"id": user.id, "username": user.username, "email": user.email}
 
 from fastapi import Header
 
@@ -104,34 +128,33 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-@app.get("/me")
-def read_me(current_user: models.User = Depends(get_current_user)):
-    return {"id": current_user.id, "username": current_user.username, "email": current_user.email}
-
-
 @app.post("/logout")
-def logout(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
-    """Invalidate the current access token by storing its jti in a blacklist.
-    Clients should discard the token after calling this endpoint.
-    """
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        jti = payload.get("jti")
-        exp_ts = payload.get("exp")
-        if jti is None or exp_ts is None:
-            raise HTTPException(status_code=400, detail="Token missing required claims")
-        expires_at = datetime.utcfromtimestamp(exp_ts)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+def logout(data: dict, db: Session = Depends(get_db)):
+    token = data.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="Token missing")
 
-    # If already revoked, return success (idempotent)
-    existing = db.query(models.RevokedToken).filter(models.RevokedToken.jti == jti).first()
-    if existing is None:
-        revoked = models.RevokedToken(jti=jti, expires_at=expires_at)
-        db.add(revoked)
+    try:
+        payload = decode_token(token)
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Invalid token")
+
+    if not jti:
+        raise HTTPException(status_code=400, detail="Invalid token structure")
+
+    # Add revoked token to DB
+    if not is_token_revoked(db, jti):
+        db_revoked = models.RevokedToken(jti=jti, expires_at=datetime.utcfromtimestamp(exp))
+        db.add(db_revoked)
         db.commit()
 
-    return {"message": "Logged out"}
+    return {"message": "Logged out successfully"}
+
+@app.get("/dashboard")
+def get_dashboard(current_user: models.User = Depends(get_current_user)):
+    return {"message": f"Welcome, {current_user.username}!"}
 
 # The old login endpoint has been replaced with the OAuth2PasswordRequestForm version above.
 
