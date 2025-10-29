@@ -27,6 +27,21 @@ export async function login({ username, password }) {
   return res.json();
 }
 
+export async function signup({ username, email, password }) {
+  const res = await fetch(`${API_URL}/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, email, password }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || "Signup failed");
+  }
+
+  return res.json();
+}
+
 export async function getMe(token) {
   const res = await fetch(`${API_URL}/me`, {
     headers: { Authorization: `Bearer ${token}` },

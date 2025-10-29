@@ -1,12 +1,15 @@
 import React, { useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
+import { login } from "../api";
 
 export default function LoginUI() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
 
@@ -15,7 +18,14 @@ export default function LoginUI() {
       return;
     }
 
-    console.log("Logging in:", { email, password });
+    try {
+      const data = await login({ username: email, password });
+      localStorage.setItem("token", data.access_token);
+      navigate("/dashboard");
+    } catch (err) {
+      console.error("Login failed:", err);
+      setError("Incorrect email or password");
+    }
   };
 
   return (
@@ -29,9 +39,16 @@ export default function LoginUI() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
-            style={{ width: "100%", margin: "8px 0", padding: "8px" }}
+            style={{
+              width: "100%",
+              margin: "8px 0",
+              padding: "8px",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+            }}
           />
         </div>
+
         <div style={{ position: "relative" }}>
           <input
             type={showPassword ? "text" : "password"}
@@ -39,7 +56,13 @@ export default function LoginUI() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            style={{ width: "100%", margin: "8px 0", padding: "8px" }}
+            style={{
+              width: "100%",
+              margin: "8px 0",
+              padding: "8px",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+            }}
           />
           <button
             type="button"
@@ -51,12 +74,15 @@ export default function LoginUI() {
               background: "none",
               border: "none",
               cursor: "pointer",
+              color: "#2196F3",
             }}
           >
             {showPassword ? "Hide" : "Show"}
           </button>
         </div>
+
         {error && <div style={{ color: "red", marginTop: 4 }}>{error}</div>}
+
         <button
           type="submit"
           style={{
@@ -72,6 +98,13 @@ export default function LoginUI() {
           Log In
         </button>
       </form>
+
+      <p style={{ marginTop: 16 }}>
+        Don’t have an account?{" "}
+        <Link to="/signup" style={{ color: "#2196F3", textDecoration: "none" }}>
+          Sign up
+        </Link>
+      </p>
     </div>
   );
 }
