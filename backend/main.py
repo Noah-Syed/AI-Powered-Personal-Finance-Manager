@@ -1,8 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-import models
-import schemas
-import database
+from . import models, schemas, database
 import bcrypt
 
 app = FastAPI()
@@ -14,6 +12,11 @@ from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from typing import List
+from fastapi import Path, Query
+from .schemas import UserCreate, UserUpdate, UserOut
+from .models import User, RevokedToken
 
 SECRET_KEY = "change_this_to_a_long_random_secret_key_please"
 ALGORITHM = "HS256"
@@ -164,3 +167,88 @@ def get_dashboard(current_user: models.User = Depends(get_current_user)):
 #     if not db_user or not bcrypt.checkpw(user.password.encode('utf-8'), db_user.hashed_password.encode('utf-8')):
 #         raise HTTPException(status_code=400, detail="Invalid credentials")
 #     return {"message": "Login successful", "user_id": db_user.id}
+
+# -----------------------------------
+
+def _to_out(u: User) -> UserOut:
+    return UserOut.model_validate(u)
+
+def _hash_pw(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def _require_self(target_user_id: int, current_user: User):
+    if current_user.id != target_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+# ----------- CRUD USER (self-only) -----------
+
+# Create user (adminless projects can treat this as an internal alias of /signup)
+@app.post("/api/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def create_user_api(payload: UserCreate, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.email == payload.email).first():
+        raise HTTPException(status_code=409, detail="Email already in use")
+    if db.query(User).filter(User.username == payload.username).first():
+        raise HTTPException(status_code=409, detail="Username already in use")
+
+    new_user = User(
+        username=payload.username,
+        email=payload.email,
+        hashed_password=_hash_pw(payload.password),
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return _to_out(new_user)
+
+# Read user (self)
+@app.get("/api/users/{user_id}", response_model=UserOut)
+def read_user_api(
+    user_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_self(user_id, current_user)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _to_out(user)
+
+# Update user (self)
+@app.patch("/api/users/{user_id}", response_model=UserOut)
+def update_user_api(
+    payload: UserUpdate,
+    user_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_self(user_id, current_user)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.email and db.query(User).filter(User.email == payload.email, User.id != user_id).first():
+        raise HTTPException(status_code=409, detail="Email already in use")
+    if payload.username and db.query(User).filter(User.username == payload.username, User.id != user_id).first():
+        raise HTTPException(status_code=409, detail="Username already in use")
+
+    if payload.username: user.username = payload.username
+    if payload.email: user.email = payload.email
+    if payload.password: user.hashed_password = _hash_pw(payload.password)
+
+    db.add(user); db.commit(); db.refresh(user)
+    return _to_out(user)
+
+# Delete user (self) — HARD DELETE
+@app.delete("/api/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user_api(
+    user_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_self(user_id, current_user)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user); db.commit()
+    return
+
