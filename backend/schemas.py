@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
+from datetime import datetime
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=80)
@@ -18,3 +19,25 @@ class UserOut(BaseModel):
 
     class Config:
         from_attributes = True  # (Pydantic v2)
+
+class ExpenseBase(BaseModel):
+    category: str = Field(min_length=2, max_length=50)
+    amount: float = Field(gt=0, description="Must be a positive number")
+    date: Optional[datetime] = None
+    
+class ExpenseCreate(ExpenseBase):
+    pass
+
+class ExpenseUpdate(BaseModel):
+    category: Optional[str] = Field(default=None, min_length=2, max_length=50)
+    amount: Optional[float] = Field(default=None, gt=0)
+    date: Optional[datetime] = None
+
+class ExpenseOut(BaseModel):
+    id: int
+    user_id: int
+    category: str
+    amount: float
+    date: datetime
+    class Config:
+        from_attributes = True

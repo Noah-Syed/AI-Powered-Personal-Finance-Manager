@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from . import models, schemas, database
+import models, schemas, database
+from models import Expense, User, RevokedToken
+from schemas import ExpenseCreate, ExpenseUpdate, ExpenseOut, UserCreate, UserUpdate, UserOut
 import bcrypt
 
 app = FastAPI()
@@ -13,10 +15,8 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from typing import List
+from typing import List, Optional
 from fastapi import Path, Query
-from .schemas import UserCreate, UserUpdate, UserOut
-from .models import User, RevokedToken
 
 SECRET_KEY = "change_this_to_a_long_random_secret_key_please"
 ALGORITHM = "HS256"
@@ -252,3 +252,105 @@ def delete_user_api(
     db.delete(user); db.commit()
     return
 
+"""
+Expenses CRUD
+"""
+@app.post("/api/expenses", response_model=ExpenseOut, status_code=status.HTTP_201_CREATED)
+def create_expense(
+    payload: ExpenseCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    new_expense = Expense(
+        user_id=current_user.id,
+        category=payload.category,
+        amount=payload.amount,
+        date=payload.date or datetime.utcnow(),
+    )
+    db.add(new_expense)
+    db.commit()
+    db.refresh(new_expense)
+    return new_expense
+
+@app.get("/api/expenses/{expense_id}", response_model=ExpenseOut)
+def get_expense(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expense = db.query(Expense).filter(Expense.id == expense_id).first()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    if expense.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    return expense
+
+
+@app.get("/api/expenses", response_model=List[ExpenseOut])
+def list_expenses(
+    category: Optional[str] = Query(default=None),
+    start_date: Optional[datetime] = Query(default=None),
+    end_date: Optional[datetime] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(Expense).filter(Expense.user_id == current_user.id)
+
+    if category:
+        query = query.filter(Expense.category == category)
+    if start_date and end_date:
+        query = query.filter(Expense.date.between(start_date, end_date))
+    elif start_date:
+        query = query.filter(Expense.date >= start_date)
+    elif end_date:
+        query = query.filter(Expense.date <= end_date)
+
+    expenses = query.order_by(Expense.date.desc()).all()
+    return expenses or []
+
+
+@app.patch("/api/expenses/{expense_id}", response_model=ExpenseOut)
+def update_expense(
+    expense_id: int,
+    payload: ExpenseUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expense = db.query(Expense).filter(Expense.id == expense_id).first()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    if expense.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if payload.amount is not None and payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    if payload.category: expense.category = payload.category
+    if payload.amount: expense.amount = payload.amount
+    if payload.date: expense.date = payload.date
+
+    db.add(expense)
+    db.commit()
+    db.refresh(expense)
+    return expense
+
+
+@app.delete("/api/expenses/{expense_id}")
+def delete_expense(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expense = db.query(Expense).filter(Expense.id == expense_id).first()
+    if not expense:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    if expense.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db.delete(expense)
+    db.commit()
+    return {"message": "Expense deleted successfully"}
