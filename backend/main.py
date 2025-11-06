@@ -1,14 +1,24 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import models, schemas, database
-from models import Expense, User, RevokedToken
-from schemas import ExpenseCreate, ExpenseUpdate, ExpenseOut, UserCreate, UserUpdate, UserOut
+from models import Expense, User, RevokedToken, FinancialGoal
+from schemas import (
+    ExpenseCreate,
+    ExpenseUpdate,
+    ExpenseOut,
+    UserCreate,
+    UserUpdate,
+    UserOut,
+    FinancialGoalOut,
+    FinancialGoalCreateViaPeriod,
+    FinancialGoalUpdate,
+)
 import bcrypt
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=database.engine)
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -179,6 +189,16 @@ def _hash_pw(plain: str) -> str:
 def _require_self(target_user_id: int, current_user: User):
     if current_user.id != target_user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Normalize datetimes to naive UTC to avoid aware/naive comparisons.
+    If aware, convert to UTC and drop tzinfo; if naive, assume UTC.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None and dt.tzinfo.utcoffset(dt) is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 # ----------- CRUD USER (self-only) -----------
 
@@ -354,3 +374,124 @@ def delete_expense(
     db.delete(expense)
     db.commit()
     return {"message": "Expense deleted successfully"}
+
+"""
+Financial Goals CRUD
+"""
+
+@app.post("/api/goals", response_model=FinancialGoalOut, status_code=status.HTTP_201_CREATED)
+def create_goal(
+    payload: FinancialGoalCreateViaPeriod,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    target_amount = payload.target_amount
+    period_days = payload.period
+    if target_amount <= 0:
+        raise HTTPException(status_code=400, detail="target_amount must be positive")
+    if period_days <= 0:
+        raise HTTPException(status_code=400, detail="period must be a positive number of days")
+
+    start_dt = _to_naive_utc(payload.start_date) if payload.start_date else datetime.utcnow()
+    end_dt = start_dt + timedelta(days=period_days)
+    if end_dt <= start_dt:
+        raise HTTPException(status_code=400, detail="end_date must be after start_date")
+
+    goal = FinancialGoal(
+        user_id=current_user.id,
+        target_savings=target_amount,
+        start_date=start_dt,
+        end_date=end_dt,
+    )
+    db.add(goal)
+    db.commit()
+    db.refresh(goal)
+    return goal
+
+
+@app.get("/api/goals", response_model=List[FinancialGoalOut])
+def list_goals(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now = datetime.utcnow()
+    query = db.query(FinancialGoal).filter(FinancialGoal.user_id == current_user.id)
+
+    if status_filter is not None:
+        allowed = {"active", "past"}
+        if status_filter not in allowed:
+            raise HTTPException(status_code=400, detail="status must be 'active' or 'past'")
+        if status_filter == "active":
+            query = query.filter(FinancialGoal.start_date <= now, FinancialGoal.end_date >= now)
+        elif status_filter == "past":
+            query = query.filter(FinancialGoal.end_date < now)
+
+    goals = query.order_by(FinancialGoal.start_date.desc()).all()
+    return goals or []
+
+
+@app.get("/api/goals/{goal_id}", response_model=FinancialGoalOut)
+def get_goal(
+    goal_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    goal = db.query(FinancialGoal).filter(FinancialGoal.id == goal_id).first()
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if goal.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return goal
+
+
+@app.patch("/api/goals/{goal_id}", response_model=FinancialGoalOut)
+def update_goal(
+    goal_id: int,
+    payload: FinancialGoalUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    goal = db.query(FinancialGoal).filter(FinancialGoal.id == goal_id).first()
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if goal.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if payload.target_savings is not None and payload.target_savings <= 0:
+        raise HTTPException(status_code=400, detail="target_savings must be positive")
+
+    new_start = _to_naive_utc(payload.start_date) if payload.start_date is not None else goal.start_date
+    new_end = _to_naive_utc(payload.end_date) if payload.end_date is not None else goal.end_date
+
+    if new_end <= new_start:
+        raise HTTPException(status_code=400, detail="end_date must be after start_date")
+
+    if payload.target_savings is not None:
+        goal.target_savings = payload.target_savings
+    if payload.start_date is not None:
+        goal.start_date = new_start
+    if payload.end_date is not None:
+        goal.end_date = new_end
+
+    db.add(goal)
+    db.commit()
+    db.refresh(goal)
+    return goal
+
+
+@app.delete("/api/goals/{goal_id}")
+def delete_goal(
+    goal_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    goal = db.query(FinancialGoal).filter(FinancialGoal.id == goal_id).first()
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if goal.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db.delete(goal)
+    db.commit()
+    return {"message": "Goal deleted successfully"}

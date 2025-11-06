@@ -41,3 +41,31 @@ class ExpenseOut(BaseModel):
     date: datetime
     class Config:
         from_attributes = True
+
+class FinancialGoalBase(BaseModel):
+    target_savings: float = Field(gt=0, description="Target amount to save (positive)")
+    start_date: datetime
+    end_date: datetime
+
+class FinancialGoalCreate(FinancialGoalBase):
+    pass
+
+class FinancialGoalUpdate(BaseModel):
+    target_savings: Optional[float] = Field(default=None, gt=0)
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+
+class FinancialGoalOut(BaseModel):
+    id: int
+    user_id: int
+    target_savings: float
+    start_date: datetime
+    end_date: datetime
+
+    class Config:
+        from_attributes = True
+
+class FinancialGoalCreateViaPeriod(BaseModel):
+    target_amount: float = Field(gt=0, description="Target amount to save (positive)")
+    period: int = Field(gt=0, description="Goal period in days")
+    start_date: Optional[datetime] = None
