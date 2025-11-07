@@ -69,3 +69,21 @@ class FinancialGoalCreateViaPeriod(BaseModel):
     target_amount: float = Field(gt=0, description="Target amount to save (positive)")
     period: int = Field(gt=0, description="Goal period in days")
     start_date: Optional[datetime] = None
+
+from datetime import date
+
+class BadgeBase(BaseModel):
+    badge_name: str = Field(min_length=2, max_length=100, description="Name of the badge")
+    date_awarded: Optional[date] = Field(default_factory=date.today, description="Date when badge was earned")
+
+class BadgeCreate(BadgeBase):
+    user_id: int = Field(gt=0, description="User ID who earned the badge")
+
+class BadgeOut(BaseModel):
+    id: int
+    user_id: int
+    badge_name: str
+    date_awarded: date
+
+    class Config:
+        from_attributes = True

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import models, schemas, database
-from models import Expense, User, RevokedToken, FinancialGoal
+from models import Expense, User, RevokedToken, FinancialGoal, Badge
 from schemas import (
     ExpenseCreate,
     ExpenseUpdate,
@@ -12,6 +12,8 @@ from schemas import (
     FinancialGoalOut,
     FinancialGoalCreateViaPeriod,
     FinancialGoalUpdate,
+    BadgeCreate,
+    BadgeOut,
 )
 import bcrypt
 
@@ -495,3 +497,103 @@ def delete_goal(
     db.delete(goal)
     db.commit()
     return {"message": "Goal deleted successfully"}
+
+
+"""
+CREATE BADGE (Manual creation)
+"""
+
+@app.post("/api/badges/create", response_model=BadgeOut, status_code=status.HTTP_201_CREATED)
+def create_badge(
+    payload: BadgeCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Ensure badges are only created for the current user
+    if payload.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Cannot create badge for another user")
+
+    new_badge = Badge(
+        user_id=current_user.id,
+        badge_name=payload.badge_name,
+        date=payload.date or datetime.utcnow(),
+    )
+    db.add(new_badge)
+    db.commit()
+    db.refresh(new_badge)
+    return new_badge
+
+
+"""
+# AUTO AWARD BADGE IF WEEKLY SAVINGS MET
+"""
+
+@app.post("/api/badges/award", response_model=List[BadgeOut])
+def award_badge_if_weekly_savings_met(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now = datetime.utcnow()
+    week_start = now - timedelta(days=7)
+
+    # Step 1: Find the user's active financial goal
+    goal = (
+        db.query(FinancialGoal)
+        .filter(
+            FinancialGoal.user_id == current_user.id,
+            FinancialGoal.start_date <= now,
+            FinancialGoal.end_date >= now,
+        )
+        .first()
+    )
+
+    if not goal:
+        raise HTTPException(status_code=404, detail="No active financial goal found")
+
+    # Step 2: Calculate total spent in the last 7 days
+    total_spent = (
+        db.query(func.sum(Expense.amount))
+        .filter(
+            Expense.user_id == current_user.id,
+            Expense.date >= week_start,
+            Expense.date <= now,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Step 3: Compare against savings target
+    savings_goal = goal.target_savings
+    actual_savings = max(0, savings_goal - total_spent)
+
+    # Step 4: Award badges based on achievements
+    earned_badges = []
+    badge_definitions = [
+        ("Savings Starter", actual_savings >= savings_goal * 0.5),
+        ("Goal Crusher", actual_savings >= savings_goal),
+        ("Consistency Champ", actual_savings >= savings_goal and now.weekday() == 6),
+    ]
+
+    for badge_name, condition in badge_definitions:
+        if condition:
+            # Prevent duplicates
+            existing = (
+                db.query(Badge)
+                .filter(Badge.user_id == current_user.id, Badge.badge_name == badge_name)
+                .first()
+            )
+            if not existing:
+                new_badge = Badge(
+                    user_id=current_user.id,
+                    badge_name=badge_name,
+                    date=datetime.utcnow(),
+                )
+                db.add(new_badge)
+                db.commit()
+                db.refresh(new_badge)
+                earned_badges.append(new_badge)
+
+    if not earned_badges:
+        raise HTTPException(status_code=200, detail="No new badges earned this week")
+
+    return earned_badges

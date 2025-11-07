@@ -9,8 +9,10 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
+
     expenses = relationship("Expense", back_populates="user")
     goals = relationship("FinancialGoal", back_populates="user")
+    badges = relationship("Badge", back_populates="user")
 
 class RevokedToken(Base):
     __tablename__ = "revoked_tokens"
@@ -42,3 +44,13 @@ class FinancialGoal(Base):
     end_date = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="goals")
+
+class Badge(Base):
+    __tablename__ = "badges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    badge_name = Column(String, nullable=False)
+    date = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="badges")
