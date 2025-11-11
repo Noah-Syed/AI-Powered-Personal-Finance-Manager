@@ -1,8 +1,9 @@
 import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
-import LoginUI from "./pages/LoginUI";
-import SignupUI from "./pages/SignupUI";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import Spending from "./pages/Spending";
 import "./App.css";
 
 function App() {
@@ -10,8 +11,9 @@ function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/login" element={<LoginUI />} />
-        <Route path="/signup" element={<SignupUI />}/>
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />}/>
+        <Route path="/spending" element={<Spending />} />
       </Routes>
     </Router>
   );

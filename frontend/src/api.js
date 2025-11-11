@@ -57,3 +57,55 @@ export async function logout(token) {
     body: JSON.stringify({ token }),
   });
 }
+
+export async function getExpenses(token) {
+  const res = await fetch(`${API_URL}/api/expenses`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Failed to load expenses");
+  return res.json();
+}
+
+export async function createExpense(token, payload) {
+  const res = await fetch(`${API_URL}/api/expenses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to create expense");
+  }
+  return res.json();
+}
+
+export async function updateExpense(token, id, payload) {
+  const res = await fetch(`${API_URL}/api/expenses/${id}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to update expense");
+  }
+  return res.json();
+}
+
+export async function deleteExpense(token, id) {
+  const res = await fetch(`${API_URL}/api/expenses/${id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to delete expense");
+  }
+  return res.json();
+}
